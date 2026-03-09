@@ -1,10 +1,47 @@
-﻿const path = require("path");
+const path = require("path");
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
 
 const PORT = Number(process.env.PORT || 3000);
 const GEMINI_API_KEY = (process.env.GEMINI_API_KEY || "").trim();
+const TASK_SUPPORT_MODES = new Set(["adjacent", "row", "column", "rook", "global"]);
+
+function parseBool(value, fallback = false) {
+  if (typeof value === "boolean") return value;
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized) return fallback;
+  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "off"].includes(normalized)) return false;
+  return fallback;
+}
+
+function clampInt(value, min, max, fallback) {
+  const n = Number.parseInt(value, 10);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, n));
+}
+
+function normalizeSupportMode(value, fallback = "adjacent") {
+  const mode = String(value || "").trim().toLowerCase();
+  return TASK_SUPPORT_MODES.has(mode) ? mode : fallback;
+}
+
+function sanitizeTaskConfig(raw = {}) {
+  return {
+    supportMode: normalizeSupportMode(raw.supportMode, "adjacent"),
+    fallbackMode: normalizeSupportMode(raw.fallbackMode, "global"),
+    neighborRadius: clampInt(raw.neighborRadius, 1, 3, 1),
+    requireDifferentArticle: parseBool(raw.requireDifferentArticle, false)
+  };
+}
+
+const SERVER_TASK_CONFIG = sanitizeTaskConfig({
+  supportMode: process.env.TASK_SUPPORT_MODE || "adjacent",
+  fallbackMode: process.env.TASK_FALLBACK_MODE || "global",
+  neighborRadius: process.env.TASK_NEIGHBOR_RADIUS || 1,
+  requireDifferentArticle: process.env.TASK_REQUIRE_DIFFERENT_ARTICLE || false
+});
 
 const PHASE = {
   SETUP_WORDS: "setup_words",
@@ -60,6 +97,7 @@ function makeState(size = 7) {
     currentTask: null,
     pendingAction: null,
     taskSeq: 0,
+    taskConfig: { ...SERVER_TASK_CONFIG },
     sentenceText: "",
     sentenceSubmitted: false,
     feedback: "",
@@ -244,13 +282,77 @@ function shuffleArray(arr) {
   return copy;
 }
 
-function pickSupportWord(cell, primaryWord) {
+function extractArticle(word) {
+  const token = String(word || "").trim().toLowerCase().split(/\s+/)[0];
+  return ["der", "die", "das"].includes(token) ? token : "";
+}
+
+function matchesSupportMode(origin, target, mode, radius) {
+  const dr = Math.abs(target.r - origin.r);
+  const dc = Math.abs(target.c - origin.c);
+  if (dr === 0 && dc === 0) return false;
+
+  switch (mode) {
+    case "adjacent":
+      return Math.max(dr, dc) <= radius;
+    case "row":
+      return target.r === origin.r;
+    case "column":
+      return target.c === origin.c;
+    case "rook":
+      return target.r === origin.r || target.c === origin.c;
+    case "global":
+    default:
+      return true;
+  }
+}
+
+function collectSupportWords(cell, mode, radius, primaryArticle, requireDifferentArticle) {
   const words = [];
   for (let r = 0; r < state.size; r += 1) {
     for (let c = 0; c < state.size; c += 1) {
-      if (r === cell.r && c === cell.c) continue;
+      if (!matchesSupportMode(cell, { r, c }, mode, radius)) continue;
       const word = getWordAt(r, c);
-      if (word) words.push(word);
+      if (!word) continue;
+
+      if (requireDifferentArticle && primaryArticle) {
+        const candidateArticle = extractArticle(word);
+        if (candidateArticle && candidateArticle === primaryArticle) continue;
+      }
+
+      words.push(word);
+    }
+  }
+  return words;
+}
+
+function pickSupportWord(cell, primaryWord) {
+  const cfg = sanitizeTaskConfig(state.taskConfig || SERVER_TASK_CONFIG);
+  const primaryArticle = extractArticle(primaryWord);
+
+  let words = collectSupportWords(
+    cell,
+    cfg.supportMode,
+    cfg.neighborRadius,
+    primaryArticle,
+    cfg.requireDifferentArticle
+  );
+
+  if (words.length === 0 && cfg.fallbackMode !== cfg.supportMode) {
+    words = collectSupportWords(
+      cell,
+      cfg.fallbackMode,
+      cfg.neighborRadius,
+      primaryArticle,
+      cfg.requireDifferentArticle
+    );
+  }
+
+  // Last fallback: relax article restriction, but keep geometric mode.
+  if (words.length === 0 && cfg.requireDifferentArticle) {
+    words = collectSupportWords(cell, cfg.supportMode, cfg.neighborRadius, primaryArticle, false);
+    if (words.length === 0 && cfg.fallbackMode !== cfg.supportMode) {
+      words = collectSupportWords(cell, cfg.fallbackMode, cfg.neighborRadius, primaryArticle, false);
     }
   }
 
@@ -262,13 +364,22 @@ function pickSupportWord(cell, primaryWord) {
 function buildCellTask(actionType, cell) {
   const primaryWord = getWordAt(cell.r, cell.c) || "Wort";
   const supportWord = pickSupportWord(cell, primaryWord);
-  const templates = [
+  const pairTemplates = [
     (a, b) => `Сформулируйте Imperativ с словами "${a}" и "${b}".`,
     (a, b) => `Составьте предложение с определённым артиклем для "${a}" и добавьте "${b}".`,
     (a, b) => `Составьте предложение, где "${a}" стоит во множественном числе, и используйте "${b}".`
   ];
-  const idx = Math.abs(cell.r * 31 + cell.c * 17 + state.openedCount + (actionType === "block" ? 5 : 0)) % templates.length;
+  const singleTemplates = [
+    (a) => `Сформулируйте Imperativ со словом "${a}".`,
+    (a) => `Составьте предложение с определённым артиклем для "${a}".`,
+    (a) => `Составьте предложение, где "${a}" стоит во множественном числе.`
+  ];
+  const idx = Math.abs(cell.r * 31 + cell.c * 17 + state.openedCount + (actionType === "block" ? 5 : 0)) % pairTemplates.length;
   state.taskSeq += 1;
+  const hasSupportWord = supportWord && supportWord !== primaryWord;
+  const prompt = hasSupportWord
+    ? pairTemplates[idx](primaryWord, supportWord)
+    : singleTemplates[idx](primaryWord);
 
   return {
     id: state.taskSeq,
@@ -276,8 +387,8 @@ function buildCellTask(actionType, cell) {
     cell: { r: cell.r, c: cell.c },
     primaryWord,
     supportWord,
-    prompt: templates[idx](primaryWord, supportWord),
-    requiredWords: supportWord && supportWord !== primaryWord ? [primaryWord, supportWord] : [primaryWord]
+    prompt,
+    requiredWords: hasSupportWord ? [primaryWord, supportWord] : [primaryWord]
   };
 }
 
@@ -377,7 +488,9 @@ function sendError(socket, message) {
 }
 
 function setSize(size) {
+  const preservedTaskConfig = state?.taskConfig ? { ...state.taskConfig } : { ...SERVER_TASK_CONFIG };
   state = makeState(size);
+  state.taskConfig = sanitizeTaskConfig(preservedTaskConfig);
 }
 
 function centerMarker() {
@@ -395,6 +508,7 @@ function resetRound({ preserveBoardWords = true } = {}) {
   state.openedCount = 1;
   state.currentTurn = "player";
   state.taskSeq = 0;
+  state.taskConfig = sanitizeTaskConfig(state.taskConfig || SERVER_TASK_CONFIG);
   clearSentenceStage();
   state.feedback = "";
   state.aiThinking = false;
@@ -541,6 +655,17 @@ io.on("connection", (socket) => {
     }
     setSize(n);
     state.info = `Размер поля изменён: ${n}x${n}`;
+    emitState();
+  });
+
+  socket.on("teacher:setTaskConfig", (raw = {}) => {
+    if (socket.data.role !== "teacher") return;
+    state.taskConfig = sanitizeTaskConfig({
+      ...state.taskConfig,
+      ...raw
+    });
+    const cfg = state.taskConfig;
+    state.info = `Настройки заданий: mode=${cfg.supportMode}, radius=${cfg.neighborRadius}, fallback=${cfg.fallbackMode}, diffArticle=${cfg.requireDifferentArticle ? "on" : "off"}.`;
     emitState();
   });
 
@@ -788,3 +913,4 @@ io.on("connection", (socket) => {
 server.listen(PORT, () => {
   console.log(`German Sea Trap server started on http://localhost:${PORT}`);
 });
+
