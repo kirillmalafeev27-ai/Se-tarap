@@ -1,0 +1,93 @@
+﻿<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Teacher - German Sea Trap</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <main class="app">
+    <section class="card header">
+      <div>
+        <h1 class="h-title">Teacher Console</h1>
+        <div class="muted">Полный контроль поля, проверки и AI.</div>
+      </div>
+      <div class="header-actions">
+        <button id="restartTeacherBtn">Перезапуск</button>
+      </div>
+      <div style="min-width:160px">
+        <div class="label">Размер поля</div>
+        <select id="sizeSelect">
+          <option value="5">5 x 5</option>
+          <option value="6">6 x 6</option>
+          <option value="7" selected>7 x 7</option>
+        </select>
+      </div>
+    </section>
+
+    <section class="layout-teacher">
+      <section class="left-col">
+        <div class="card board-wrap">
+          <div id="board" class="board" aria-label="Игровое поле"></div>
+        </div>
+
+        <div class="card panel">
+          <div class="label">Фаза</div>
+          <div id="phaseText" class="value"></div>
+          <div id="infoText" class="muted" style="margin-top:6px"></div>
+        </div>
+
+        <div class="card panel">
+          <div class="label">Инструкция игроку</div>
+          <div id="instructionText" class="value"></div>
+          <div style="margin-top:8px">
+            <div class="label">Порядок слов</div>
+            <div id="requiredWords" class="chips"></div>
+          </div>
+          <div style="margin-top:8px">
+            <div class="label">Отправленное предложение</div>
+            <div id="sentencePreview" class="feedback muted">Игрок еще ничего не отправил.</div>
+          </div>
+          <div style="margin-top:8px" class="row">
+            <button id="teacherCorrectBtn">Правильно</button>
+            <button id="teacherWrongBtn">Неправильно</button>
+          </div>
+          <div style="margin-top:8px" class="label">Лог</div>
+          <div id="logBox" class="feedback muted">Ожидание событий.</div>
+        </div>
+      </section>
+
+      <aside class="right-col">
+        <div class="card panel">
+          <div class="label">Контейнер слов (DE+RU пары можно вставлять)</div>
+          <textarea id="wordContainer" rows="6" placeholder="Пример строк:&#10;Haus - дом&#10;gehen идти"></textarea>
+          <div class="row" style="margin-top:8px">
+            <button id="loadWordsBtn">Загрузить слова</button>
+            <button id="shuffleBoardBtn">Перемешать слова на поле</button>
+          </div>
+          <div id="loadStatus" class="muted" style="margin-top:6px">Нужно загрузить слова.</div>
+        </div>
+
+        <div class="card panel">
+          <div class="label">Список слов</div>
+          <div id="wordButtons" class="word-buttons"></div>
+          <div id="wordHint" class="muted" style="margin-top:6px"></div>
+        </div>
+
+        <div class="card panel">
+          <div class="label">Запуск игры</div>
+          <div class="muted">Когда все клетки заполнены, нажмите кнопку запуска.</div>
+          <div class="row" style="margin-top:8px">
+            <button id="finishPlacementBtn">Готово: начать игру</button>
+          </div>
+        </div>
+      </aside>
+    </section>
+  </main>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/common.js"></script>
+  <script src="/teacher.js"></script>
+</body>
+</html>
