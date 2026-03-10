@@ -9,6 +9,7 @@
     phaseText: document.getElementById("phaseText"),
     instructionText: document.getElementById("instructionText"),
     requiredWords: document.getElementById("requiredWords"),
+    topicInput: document.getElementById("topicInput"),
     sentenceInput: document.getElementById("sentenceInput"),
     sendSentenceBtn: document.getElementById("sendSentenceBtn"),
     virtualCheckBtn: document.getElementById("virtualCheckBtn"),
@@ -16,12 +17,12 @@
   };
 
   let state = null;
-  let lastPopupTaskId = null;
 
   const renderer = createBoardRenderer(els.board, (r, c) => {
     if (!state) return;
+    if (state.aiThinking) return;
     if (state.phase === PHASE.PLAYER_MOVE || state.phase === PHASE.PLAYER_BLOCK) {
-      socket.emit("game:cellClick", { r, c });
+      socket.emit("game:cellClick", { r, c, topic: els.topicInput.value });
     }
   });
 
@@ -52,6 +53,10 @@
   }
 
   function instruction(phase) {
+    if (state?.aiThinking && !state?.currentTask) {
+      return state.info || "Генерация задания...";
+    }
+
     switch (phase) {
       case PHASE.SETUP_WORDS:
         return "Подождите, пока учитель завершит подготовку поля и запустит игру.";
@@ -85,20 +90,6 @@
     }
   }
 
-  function popupTaskIfNeeded(prevTaskId) {
-    if (!state || state.phase !== PHASE.AWAIT_SENTENCE || !state.currentTask) return;
-    const nextTaskId = state.currentTask.id;
-    if (!nextTaskId || nextTaskId === prevTaskId || nextTaskId === lastPopupTaskId) return;
-
-    const task = state.currentTask;
-    const action = task.actionType === "move" ? "Перемещение" : "Блокировка";
-    const cellLabel = `(${task.cell.r + 1}, ${task.cell.c + 1})`;
-    const text = `${action}, клетка ${cellLabel}\n\n${task.prompt}`;
-
-    window.alert(text);
-    lastPopupTaskId = nextTaskId;
-  }
-
   function detectTone(text) {
     const sample = String(text || "").toLowerCase();
     if (sample.includes("невер") || sample.includes("попроб")) return "warn";
@@ -112,21 +103,26 @@
     const isPlayerTurn = state.currentTurn === "player";
     const reach = state.phase === PHASE.PLAYER_MOVE && isPlayerTurn ? legalMoves(state) : [];
     const blocks = state.phase === PHASE.PLAYER_BLOCK && isPlayerTurn ? legalBlocks(state) : [];
+    const waitingTask = state.aiThinking
+      && !state.currentTask
+      && (state.phase === PHASE.PLAYER_MOVE || state.phase === PHASE.PLAYER_BLOCK);
 
     renderer.render(state, { reach, blocks, setupActive: false });
+    renderer.syncTaskTooltip(state);
 
-    els.phaseText.textContent = phaseLabel(state.phase);
+    els.phaseText.textContent = waitingTask ? "Генерация задания" : phaseLabel(state.phase);
     els.instructionText.textContent = instruction(state.phase);
     renderRequiredWords();
 
-    const canInput = state.phase === PHASE.AWAIT_SENTENCE;
+    const canInput = state.phase === PHASE.AWAIT_SENTENCE && !state.aiThinking;
     els.sentenceInput.disabled = !canInput;
     els.sendSentenceBtn.disabled = !canInput;
     els.virtualCheckBtn.disabled = !canInput;
+    els.topicInput.disabled = Boolean(state.aiThinking);
 
     const total = state.size * state.size;
     const hasPool = (state.wordPool || []).length === total;
-    els.restartStudentBtn.disabled = !hasPool;
+    els.restartStudentBtn.disabled = !hasPool || state.aiThinking;
 
     if (state.phase === PHASE.GAME_OVER) {
       setFeedback(`Игра завершена. Победил: ${state.winner === "player" ? "Игрок" : "Компьютер"}.`, "bad");
@@ -143,10 +139,8 @@
   });
 
   socket.on("state:update", ({ state: nextState }) => {
-    const prevTaskId = state?.currentTask?.id || null;
     state = nextState;
     render();
-    popupTaskIfNeeded(prevTaskId);
   });
 
   socket.on("action:error", ({ message }) => {
@@ -174,6 +168,9 @@
   });
 
   window.addEventListener("resize", () => {
-    if (state) renderer.forceShipPosition(state);
+    if (state) {
+      renderer.forceShipPosition(state);
+      renderer.syncTaskTooltip(state);
+    }
   });
 })();

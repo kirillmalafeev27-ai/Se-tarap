@@ -11,6 +11,7 @@
     infoText: document.getElementById("infoText"),
     instructionText: document.getElementById("instructionText"),
     requiredWords: document.getElementById("requiredWords"),
+    topicInput: document.getElementById("topicInput"),
     sentencePreview: document.getElementById("sentencePreview"),
     logBox: document.getElementById("logBox"),
 
@@ -32,6 +33,7 @@
 
   const renderer = createBoardRenderer(els.board, (r, c) => {
     if (!state) return;
+    if (state.aiThinking) return;
 
     if (state.phase === PHASE.SETUP_WORDS) {
       if (selectedWordId == null) return;
@@ -40,7 +42,7 @@
     }
 
     if (state.phase === PHASE.PLAYER_MOVE || state.phase === PHASE.PLAYER_BLOCK) {
-      socket.emit("game:cellClick", { r, c });
+      socket.emit("game:cellClick", { r, c, topic: els.topicInput.value });
     }
   });
 
@@ -71,6 +73,10 @@
   }
 
   function instructionForPhase(phase) {
+    if (state?.aiThinking && !state?.currentTask) {
+      return state.info || "Генерация задания...";
+    }
+
     switch (phase) {
       case PHASE.SETUP_WORDS:
         return "Заполните поле вручную или нажмите «Перемешать слова на поле», затем «Готово: начать игру».";
@@ -110,6 +116,7 @@
       btn.type = "button";
       btn.className = "word-btn";
       btn.textContent = item.word;
+      btn.disabled = Boolean(state?.aiThinking);
 
       if (state.phase === PHASE.SETUP_WORDS && item.used) btn.classList.add("used");
       if (selectedWordId === item.id) btn.classList.add("active");
@@ -127,8 +134,12 @@
 
   function renderStatusOnly() {
     if (!state) return;
+    const uiLocked = Boolean(state.aiThinking);
+    const waitingTask = uiLocked
+      && !state.currentTask
+      && (state.phase === PHASE.PLAYER_MOVE || state.phase === PHASE.PLAYER_BLOCK);
 
-    els.phaseText.textContent = phaseLabel(state.phase);
+    els.phaseText.textContent = waitingTask ? "Генерация задания" : phaseLabel(state.phase);
     els.infoText.textContent = state.info || "";
     els.instructionText.textContent = instructionForPhase(state.phase);
 
@@ -146,11 +157,15 @@
     const setupWords = state.phase === PHASE.SETUP_WORDS;
     const awaitSentence = state.phase === PHASE.AWAIT_SENTENCE;
 
-    els.shuffleBoardBtn.disabled = !setupWords || !hasFullPool;
-    els.finishPlacementBtn.disabled = !setupWords || assigned !== total;
-    els.restartTeacherBtn.disabled = !hasFullPool;
-    els.teacherCorrectBtn.disabled = !awaitSentence;
-    els.teacherWrongBtn.disabled = !awaitSentence;
+    els.sizeSelect.disabled = uiLocked;
+    els.wordContainer.disabled = uiLocked;
+    els.topicInput.disabled = uiLocked;
+    els.loadWordsBtn.disabled = uiLocked;
+    els.shuffleBoardBtn.disabled = uiLocked || !setupWords || !hasFullPool;
+    els.finishPlacementBtn.disabled = uiLocked || !setupWords || assigned !== total;
+    els.restartTeacherBtn.disabled = uiLocked || !hasFullPool;
+    els.teacherCorrectBtn.disabled = uiLocked || !awaitSentence;
+    els.teacherWrongBtn.disabled = uiLocked || !awaitSentence;
 
     if (setupWords) {
       els.wordHint.textContent = "Выберите слово и кликните клетку поля, либо используйте автозаполнение кнопкой «Перемешать слова на поле».";
@@ -170,6 +185,7 @@
     const setupActive = state.phase === PHASE.SETUP_WORDS && selectedWordId != null;
 
     renderer.render(state, { reach, blocks, setupActive });
+    renderer.syncTaskTooltip(state);
     renderRequiredWords();
     renderWordButtons();
     renderStatusOnly();
@@ -238,6 +254,9 @@
   });
 
   window.addEventListener("resize", () => {
-    if (state) renderer.forceShipPosition(state);
+    if (state) {
+      renderer.forceShipPosition(state);
+      renderer.syncTaskTooltip(state);
+    }
   });
 })();

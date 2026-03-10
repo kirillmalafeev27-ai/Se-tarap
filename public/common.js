@@ -53,6 +53,7 @@
     let size = 0;
     let cells = [];
     let shipEl = null;
+    let tooltipEl = null;
     let prevBlocked = [];
 
     function createMatrix(n, value) {
@@ -76,6 +77,34 @@
 
     function cellAt(r, c) {
       return cells[r * size + c];
+    }
+
+    function hideTooltip() {
+      if (!tooltipEl) return;
+      tooltipEl.textContent = "";
+      tooltipEl.classList.add("hidden");
+    }
+
+    function syncTaskTooltip(state) {
+      if (
+        !tooltipEl ||
+        !state ||
+        state.phase !== PHASE.AWAIT_SENTENCE ||
+        !state.currentTask?.prompt ||
+        !state.currentTask?.cell
+      ) {
+        hideTooltip();
+        return;
+      }
+
+      const cell = state.currentTask.cell;
+      const m = metrics();
+      const p = pixel(cell);
+
+      tooltipEl.textContent = state.currentTask.prompt;
+      tooltipEl.style.left = `${p.x}px`;
+      tooltipEl.style.top = `${Math.max(18, p.y - m.cellSize / 2 - 10)}px`;
+      tooltipEl.classList.remove("hidden");
     }
 
     function ensureMine(r, c, animateDrop) {
@@ -130,11 +159,17 @@
       shipEl = document.createElement("div");
       shipEl.className = "ship";
       boardEl.appendChild(shipEl);
+
+      tooltipEl = document.createElement("div");
+      tooltipEl.className = "cell-tooltip hidden";
+      boardEl.appendChild(tooltipEl);
     }
 
     function render(state, opts = {}) {
       if (!state) return;
       if (state.size !== size) rebuild(state.size);
+      boardEl.classList.toggle("busy", Boolean(state.aiThinking));
+      boardEl.setAttribute("aria-busy", state.aiThinking ? "true" : "false");
 
       const moveSet = new Set((opts.reach || []).map((p) => key(p.r, p.c)));
       const blockSet = new Set((opts.blocks || []).map((p) => key(p.r, p.c)));
@@ -177,11 +212,13 @@
       requestAnimationFrame(() => {
         shipEl.style.transition = "";
       });
+      syncTaskTooltip(state);
     }
 
     return {
       render,
-      forceShipPosition
+      forceShipPosition,
+      syncTaskTooltip
     };
   }
 
