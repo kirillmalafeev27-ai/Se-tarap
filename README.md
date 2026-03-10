@@ -20,6 +20,22 @@
 - `Shuffle words on board` shuffles words directly on the field.
 - Gemini key is stored on backend (`GEMINI_API_KEY`) and never exposed to student page.
 
+## Task Pairing Config (Server-side)
+
+You can configure how the second word is selected for a task via env vars:
+
+- `TASK_SUPPORT_MODE` = `adjacent` | `row` | `column` | `rook` | `global`
+- `TASK_FALLBACK_MODE` = fallback mode if no candidate found
+- `TASK_NEIGHBOR_RADIUS` = `1..3` (used by `adjacent`)
+- `TASK_REQUIRE_DIFFERENT_ARTICLE` = `true`/`false` (tries to avoid same article der/die/das)
+
+Defaults:
+
+- `TASK_SUPPORT_MODE=adjacent`
+- `TASK_FALLBACK_MODE=global`
+- `TASK_NEIGHBOR_RADIUS=1`
+- `TASK_REQUIRE_DIFFERENT_ARTICLE=false`
+
 
 ## Russian Guide
 

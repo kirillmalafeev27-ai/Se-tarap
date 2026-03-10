@@ -1,4 +1,4 @@
-const path = require("path");
+﻿const path = require("path");
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
@@ -392,6 +392,11 @@ function buildCellTask(actionType, cell) {
   };
 }
 
+function normalizeTaskTopic(topic) {
+  const value = String(topic || "").trim();
+  return value || "Свободная тема";
+}
+
 function clearSentenceStage() {
   state.requiredWords = [];
   state.currentTask = null;
@@ -400,8 +405,47 @@ function clearSentenceStage() {
   state.sentenceSubmitted = false;
 }
 
-function startTaskStage(actionType, cell) {
-  const task = buildCellTask(actionType, cell);
+async function startTaskStage(actionType, cell, topic) {
+  const primaryWord = String(getWordAt(cell.r, cell.c) || "").trim();
+  if (!primaryWord) {
+    throw new Error("В выбранной клетке нет немецкого слова.");
+  }
+
+  const normalizedTopic = normalizeTaskTopic(topic);
+  const geminiPrompt = [
+    "Ты учитель немецкого.",
+    `Составь одно задание на русском языке для ученика. Ученик должен составить предложение, используя немецкое слово '${primaryWord}'.`,
+    `Контекст/тема предложения: '${normalizedTopic}'.`,
+    "Задание должно быть коротким.",
+    "Верни только текст задания без пояснений и кавычек."
+  ].join(" ");
+
+  state.pendingAction = {
+    type: actionType,
+    target: { r: cell.r, c: cell.c },
+    from: { ...state.marker }
+  };
+  state.currentTask = null;
+  state.requiredWords = [];
+  state.sentenceText = "";
+  state.sentenceSubmitted = false;
+  state.aiThinking = true;
+  state.feedback = "Генерация задания...";
+  state.info = "Генерация задания...";
+  emitState();
+
+  const prompt = (await callGemini(geminiPrompt)).trim();
+  state.taskSeq += 1;
+  const task = {
+    id: state.taskSeq,
+    actionType,
+    cell: { r: cell.r, c: cell.c },
+    primaryWord,
+    topic: normalizedTopic,
+    prompt,
+    requiredWords: [primaryWord]
+  };
+
   state.pendingAction = {
     type: actionType,
     target: { r: cell.r, c: cell.c },
@@ -412,10 +456,12 @@ function startTaskStage(actionType, cell) {
   state.sentenceText = "";
   state.sentenceSubmitted = false;
   state.phase = PHASE.AWAIT_SENTENCE;
+  state.aiThinking = false;
   state.feedback = "Сформулируйте ответ и отправьте учителю.";
   state.info = actionType === "move"
     ? "Проверка задания для перемещения маркера."
     : "Проверка задания для блокировки клетки.";
+  emitState();
 }
 
 function markOpened(cell) {
@@ -639,6 +685,10 @@ function canPlayAsPlayer(socket) {
   return socket.data.role === "student" || socket.data.role === "teacher";
 }
 
+function interactionLocked() {
+  return busyComputerTurn || state.aiThinking;
+}
+
 io.on("connection", (socket) => {
   const roleRaw = socket.handshake.auth?.role || socket.handshake.query?.role || "student";
   const role = roleRaw === "teacher" ? "teacher" : "student";
@@ -648,6 +698,10 @@ io.on("connection", (socket) => {
 
   socket.on("teacher:setSize", ({ size }) => {
     if (socket.data.role !== "teacher") return;
+    if (interactionLocked()) {
+      sendError(socket, "Дождитесь завершения текущего действия.");
+      return;
+    }
     const n = Number(size);
     if (![5, 6, 7].includes(n)) {
       sendError(socket, "Допустимые размеры: 5, 6, 7.");
@@ -671,6 +725,10 @@ io.on("connection", (socket) => {
 
   socket.on("teacher:loadWords", ({ raw }) => {
     if (socket.data.role !== "teacher") return;
+    if (interactionLocked()) {
+      sendError(socket, "Дождитесь завершения текущего действия.");
+      return;
+    }
     const words = parseWordContainer(raw);
     const needed = state.size * state.size;
     if (words.length !== needed) {
@@ -686,6 +744,10 @@ io.on("connection", (socket) => {
 
   socket.on("teacher:shuffleBoardWords", () => {
     if (socket.data.role !== "teacher") return;
+    if (interactionLocked()) {
+      sendError(socket, "Дождитесь завершения текущего действия.");
+      return;
+    }
     if (state.phase !== PHASE.SETUP_WORDS) {
       sendError(socket, "Перемешивание доступно только на этапе подготовки.");
       return;
@@ -712,6 +774,10 @@ io.on("connection", (socket) => {
 
   socket.on("teacher:finishWordPlacement", () => {
     if (socket.data.role !== "teacher") return;
+    if (interactionLocked()) {
+      sendError(socket, "Дождитесь завершения текущего действия.");
+      return;
+    }
     if (state.phase !== PHASE.SETUP_WORDS) return;
     if (!allBoardCellsAssigned()) {
       sendError(socket, `Заполнено ${boardAssignedCount()} из ${state.size * state.size} клеток.`);
@@ -726,8 +792,8 @@ io.on("connection", (socket) => {
 
   socket.on("game:restart", () => {
     if (!canPlayAsPlayer(socket)) return;
-    if (busyComputerTurn) {
-      sendError(socket, "Дождитесь завершения хода компьютера.");
+    if (interactionLocked()) {
+      sendError(socket, "Дождитесь завершения текущего действия.");
       return;
     }
 
@@ -741,7 +807,7 @@ io.on("connection", (socket) => {
     emitState();
   });
 
-  socket.on("game:cellClick", ({ r, c, wordId }) => {
+  socket.on("game:cellClick", async ({ r, c, wordId, topic } = {}) => {
     const row = Number(r);
     const col = Number(c);
     if (!inBounds(state.size, row, col)) return;
@@ -774,15 +840,26 @@ io.on("connection", (socket) => {
     }
 
     if (!canPlayAsPlayer(socket)) return;
+    if (interactionLocked()) {
+      sendError(socket, "Дождитесь завершения текущего действия.");
+      return;
+    }
     if (state.currentTurn !== "player") return;
 
     if (state.phase === PHASE.PLAYER_MOVE) {
       const move = getLegalMoves(state.marker).find((p) => p.r === row && p.c === col);
       if (!move) return;
 
-      startTaskStage("move", move);
-      state.feedback = "Открыто задание для перемещения. Введите ответ и отправьте учителю.";
-      emitState();
+      try {
+        await startTaskStage("move", move, topic);
+      } catch (err) {
+        clearSentenceStage();
+        state.aiThinking = false;
+        state.feedback = "Не удалось сгенерировать задание. Попробуйте выбрать клетку ещё раз.";
+        state.info = "Ошибка генерации задания.";
+        emitState();
+        sendError(socket, `Не удалось сгенерировать задание: ${err.message}`);
+      }
       return;
     }
 
@@ -790,9 +867,16 @@ io.on("connection", (socket) => {
       const block = getLegalBlocks().find((p) => p.r === row && p.c === col);
       if (!block) return;
 
-      startTaskStage("block", block);
-      state.feedback = "Открыто задание для блокировки. Введите ответ и отправьте учителю.";
-      emitState();
+      try {
+        await startTaskStage("block", block, topic);
+      } catch (err) {
+        clearSentenceStage();
+        state.aiThinking = false;
+        state.feedback = "Не удалось сгенерировать задание. Попробуйте выбрать клетку ещё раз.";
+        state.info = "Ошибка генерации задания.";
+        emitState();
+        sendError(socket, `Не удалось сгенерировать задание: ${err.message}`);
+      }
     }
   });
 
@@ -913,4 +997,3 @@ io.on("connection", (socket) => {
 server.listen(PORT, () => {
   console.log(`German Sea Trap server started on http://localhost:${PORT}`);
 });
-
