@@ -1,4 +1,4 @@
-﻿const path = require("path");
+const path = require("path");
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
@@ -392,9 +392,47 @@ function buildCellTask(actionType, cell) {
   };
 }
 
-function normalizeTaskTopic(topic) {
-  const value = String(topic || "").trim();
-  return value || "Свободная тема";
+async function generateCellTask(actionType, cell, topic) {
+  const primaryWord = getWordAt(cell.r, cell.c) || "Wort";
+  const supportWord = pickSupportWord(cell, primaryWord);
+  const hasSupportWord = supportWord && supportWord !== primaryWord;
+  const requiredWords = hasSupportWord ? [primaryWord, supportWord] : [primaryWord];
+
+  const topicStr = String(topic || "").trim();
+  const topicContext = topicStr ? `Тема/Контекст/Грамматика: "${topicStr}".` : "Тема: свободная.";
+  const wordsStr = requiredWords.map((word) => `"${word}"`).join(" и ");
+
+  const promptText = `Ты — креативный ведущий и гейм-мастер в игре по изучению немецкого языка.
+Твоя задача: придумать ОДНО короткое, увлекательное задание на русском языке для игрока. Игрок должен будет написать немецкое предложение.
+
+Обязательные слова: ${wordsStr}.
+${topicContext}
+
+ВАЖНЫЕ ПРАВИЛА:
+1. Задание должно быть в виде мини-ситуации, квеста или ролевого вызова.
+2. НЕ ПИШИ скучные инструкции вроде "Составь предложение в повелительном наклонении по теме здоровье".
+3. ВМЕСТО ЭТОГО пиши живо: например, "Представь, что твой напарник ранен в бою, а враги близко. Строго прикажи ему остаться в укрытии, используя слово...".
+4. Учитывай, что игра адаптирована для возраста около 11 лет. Элементы приключений, легких стычек или юмора приветствуются, но без излишней жестокости.
+5. Текст должен быть коротким: 1-2 предложения максимум. Пиши сразу суть задания, без приветствий.`;
+
+  let generatedPrompt = "";
+  try {
+    generatedPrompt = (await callGemini(promptText)).trim();
+  } catch (err) {
+    console.error("Gemini task error:", err);
+    generatedPrompt = `(Ошибка генерации) Составьте предложение со словами: ${requiredWords.join(", ")}`;
+  }
+
+  state.taskSeq += 1;
+  return {
+    id: state.taskSeq,
+    actionType,
+    cell: { r: cell.r, c: cell.c },
+    primaryWord,
+    supportWord,
+    prompt: generatedPrompt,
+    requiredWords
+  };
 }
 
 function clearSentenceStage() {
@@ -406,20 +444,6 @@ function clearSentenceStage() {
 }
 
 async function startTaskStage(actionType, cell, topic) {
-  const primaryWord = String(getWordAt(cell.r, cell.c) || "").trim();
-  if (!primaryWord) {
-    throw new Error("В выбранной клетке нет немецкого слова.");
-  }
-
-  const normalizedTopic = normalizeTaskTopic(topic);
-  const geminiPrompt = [
-    "Ты учитель немецкого.",
-    `Составь одно задание на русском языке для ученика. Ученик должен составить предложение, используя немецкое слово '${primaryWord}'.`,
-    `Контекст/тема предложения: '${normalizedTopic}'.`,
-    "Задание должно быть коротким.",
-    "Верни только текст задания без пояснений и кавычек."
-  ].join(" ");
-
   state.pendingAction = {
     type: actionType,
     target: { r: cell.r, c: cell.c },
@@ -434,23 +458,7 @@ async function startTaskStage(actionType, cell, topic) {
   state.info = "Генерация задания...";
   emitState();
 
-  const prompt = (await callGemini(geminiPrompt)).trim();
-  state.taskSeq += 1;
-  const task = {
-    id: state.taskSeq,
-    actionType,
-    cell: { r: cell.r, c: cell.c },
-    primaryWord,
-    topic: normalizedTopic,
-    prompt,
-    requiredWords: [primaryWord]
-  };
-
-  state.pendingAction = {
-    type: actionType,
-    target: { r: cell.r, c: cell.c },
-    from: { ...state.marker }
-  };
+  const task = await generateCellTask(actionType, cell, topic);
   state.currentTask = task;
   state.requiredWords = task.requiredWords.slice();
   state.sentenceText = "";
@@ -581,7 +589,7 @@ async function callGemini(prompt) {
     throw new Error("GEMINI_API_KEY не задан на сервере.");
   }
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
   const body = {
     contents: [{ role: "user", parts: [{ text: prompt }] }],
     generationConfig: { temperature: 0.2 }
@@ -687,6 +695,35 @@ function canPlayAsPlayer(socket) {
 
 function interactionLocked() {
   return busyComputerTurn || state.aiThinking;
+}
+
+function rejectSentence(feedbackText = "Попробуй ещё раз.", infoText = "Ответ отмечен как неверный.") {
+  state.aiThinking = false;
+  state.sentenceSubmitted = false;
+  state.feedback = feedbackText;
+  state.info = infoText;
+  emitState();
+}
+
+async function approveSentence() {
+  state.aiThinking = false;
+
+  if (state.pendingAction?.type === "move") {
+    const animation = finalizeApprovedMove();
+    if (!animation) throw new Error("Не удалось применить перемещение.");
+    emitState({ animation: { type: "move", actor: "player", from: animation.from, to: animation.to } });
+    return;
+  }
+
+  if (state.pendingAction?.type === "block") {
+    const cell = finalizeApprovedBlock();
+    if (!cell) throw new Error("Не удалось применить блокировку.");
+    emitState({ animation: { type: "block", actor: "player", cell } });
+    await runComputerTurn();
+    return;
+  }
+
+  throw new Error("Неизвестный тип задания.");
 }
 
 io.on("connection", (socket) => {
@@ -910,10 +947,7 @@ io.on("connection", (socket) => {
     }
 
     if (!correct) {
-      state.sentenceSubmitted = false;
-      state.feedback = "Попробуй ещё раз.";
-      state.info = "Ответ отмечен как неверный.";
-      emitState();
+      rejectSentence("Попробуй ещё раз.", "Ответ отмечен как неверный.");
       return;
     }
 
@@ -922,28 +956,11 @@ io.on("connection", (socket) => {
       return;
     }
 
-    if (state.pendingAction.type === "move") {
-      const animation = finalizeApprovedMove();
-      if (!animation) {
-        sendError(socket, "Не удалось применить перемещение.");
-        return;
-      }
-      emitState({ animation: { type: "move", actor: "player", from: animation.from, to: animation.to } });
-      return;
+    try {
+      await approveSentence();
+    } catch (err) {
+      sendError(socket, err.message);
     }
-
-    if (state.pendingAction.type === "block") {
-      const cell = finalizeApprovedBlock();
-      if (!cell) {
-        sendError(socket, "Не удалось применить блокировку.");
-        return;
-      }
-      emitState({ animation: { type: "block", actor: "player", cell } });
-      await runComputerTurn();
-      return;
-    }
-
-    sendError(socket, "Неизвестный тип задания.");
   });
 
   socket.on("student:virtualCheck", async ({ text }) => {
@@ -956,6 +973,12 @@ io.on("connection", (socket) => {
     const sentence = String(text || "").trim();
     const required = state.requiredWords.slice();
     const local = checkWordOrderLocal(required, sentence);
+    state.sentenceText = sentence;
+    state.sentenceSubmitted = true;
+    state.aiThinking = true;
+    state.feedback = "Виртуальный учитель проверяет ответ...";
+    state.info = "Виртуальный учитель проверяет ответ...";
+    emitState();
 
     let ok = local;
     let message = "Локальная проверка выполнена.";
@@ -982,6 +1005,23 @@ io.on("connection", (socket) => {
         : "Gemini недоступен. Локальная проверка: порядок слов нарушен.";
     }
 
+    const resultMessage = `Виртуальный учитель:\n${message}`;
+
+    if (ok) {
+      try {
+        await approveSentence();
+      } catch (err) {
+        state.aiThinking = false;
+        state.feedback = "Не удалось применить результат виртуальной проверки.";
+        state.info = "Ошибка применения результата виртуальной проверки.";
+        emitState();
+        sendError(socket, err.message);
+        return;
+      }
+    } else {
+      rejectSentence(`${resultMessage}\n\nПопробуй ещё раз.`, "Виртуальный учитель отклонил ответ.");
+    }
+
     socket.emit("virtual:result", { ok, message });
     if (socket.data.role !== "teacher") {
       io.emit("teacher:virtualLog", {
@@ -997,8 +1037,3 @@ io.on("connection", (socket) => {
 server.listen(PORT, () => {
   console.log(`German Sea Trap server started on http://localhost:${PORT}`);
 });
-
-
-
-
-
