@@ -8,5 +8,9 @@ services:
     healthCheckPath: /health
     autoDeploy: true
     envVars:
-      - key: GEMINI_API_KEY
+      - key: AITUNNEL_API_KEY
         sync: false
+      - key: AITUNNEL_BASE_URL
+        value: https://api.aitunnel.ru/v1
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash

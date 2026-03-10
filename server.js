@@ -1,10 +1,13 @@
-const path = require("path");
+﻿const path = require("path");
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
 
 const PORT = Number(process.env.PORT || 3000);
-const GEMINI_API_KEY = (process.env.GEMINI_API_KEY || "").trim();
+const AITUNNEL_API_KEY = (process.env.AITUNNEL_API_KEY || "").trim();
+const AITUNNEL_BASE_URL = String(process.env.AITUNNEL_BASE_URL || "https://api.aitunnel.ru/v1")
+  .trim()
+  .replace(/\/+$/g, "");
 const GEMINI_MODEL = (process.env.GEMINI_MODEL || "gemini-2.5-flash").trim();
 const TASK_SUPPORT_MODES = new Set(["adjacent", "row", "column", "rook", "global"]);
 
@@ -66,7 +69,14 @@ app.use(express.static(__dirname));
 app.get("/", (_req, res) => res.redirect("/student.html"));
 app.get("/student", (_req, res) => res.redirect("/student.html"));
 app.get("/teacher", (_req, res) => res.redirect("/teacher.html"));
-app.get("/health", (_req, res) => res.json({ ok: true, time: Date.now() }));
+app.get("/health", (_req, res) => res.json({
+  ok: true,
+  time: Date.now(),
+  aiProvider: "aitunnel",
+  aiModel: GEMINI_MODEL,
+  aiBaseUrl: AITUNNEL_BASE_URL,
+  hasApiKey: Boolean(AITUNNEL_API_KEY)
+}));
 
 function createMatrix(size, value) {
   return Array.from({ length: size }, () => Array(size).fill(value));
@@ -593,29 +603,41 @@ async function sleep(ms) {
 }
 
 async function callGemini(prompt) {
-  if (!GEMINI_API_KEY) {
-    throw new Error("GEMINI_API_KEY не задан на сервере.");
+  if (!AITUNNEL_API_KEY) {
+    throw new Error("AITUNNEL_API_KEY не задан на сервере.");
   }
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(GEMINI_MODEL)}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
+  const url = `${AITUNNEL_BASE_URL}/chat/completions`;
   const body = {
-    contents: [{ role: "user", parts: [{ text: prompt }] }],
-    generationConfig: { temperature: 0.2 }
+    model: GEMINI_MODEL,
+    messages: [{ role: "user", content: prompt }],
+    temperature: 0.2,
+    max_tokens: 800
   };
 
   const resp = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${AITUNNEL_API_KEY}`
+    },
     body: JSON.stringify(body)
   });
 
   if (!resp.ok) {
     const text = await resp.text();
-    throw new Error(`Gemini API ${resp.status} [${GEMINI_MODEL}]: ${text}`);
+    throw new Error(`AITunnel API ${resp.status} [${GEMINI_MODEL}]: ${text}`);
   }
 
   const data = await resp.json();
-  const text = data?.candidates?.[0]?.content?.parts?.map((p) => p.text || "").join("\n").trim();
+  const content = data?.choices?.[0]?.message?.content;
+  const text = Array.isArray(content)
+    ? content.map((part) => {
+      if (typeof part === "string") return part;
+      if (part?.type === "text") return part.text || "";
+      return "";
+    }).join("\n").trim()
+    : String(content || "").trim();
   if (!text) throw new Error("Gemini вернул пустой ответ.");
   return text;
 }
