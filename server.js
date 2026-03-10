@@ -5,6 +5,7 @@ const { Server } = require("socket.io");
 
 const PORT = Number(process.env.PORT || 3000);
 const GEMINI_API_KEY = (process.env.GEMINI_API_KEY || "").trim();
+const GEMINI_MODEL = (process.env.GEMINI_MODEL || "gemini-2.5-flash").trim();
 const TASK_SUPPORT_MODES = new Set(["adjacent", "row", "column", "rook", "global"]);
 
 function parseBool(value, fallback = false) {
@@ -419,8 +420,15 @@ ${topicContext}
   try {
     generatedPrompt = (await callGemini(promptText)).trim();
   } catch (err) {
-    console.error("Gemini task error:", err);
-    generatedPrompt = `(Ошибка генерации) Составьте предложение со словами: ${requiredWords.join(", ")}`;
+    console.error("Gemini task error:", {
+      model: GEMINI_MODEL,
+      actionType,
+      cell,
+      topic: topicStr || "(свободная)",
+      requiredWords,
+      error: err?.message || String(err)
+    });
+    throw err;
   }
 
   state.taskSeq += 1;
@@ -589,7 +597,7 @@ async function callGemini(prompt) {
     throw new Error("GEMINI_API_KEY не задан на сервере.");
   }
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(GEMINI_MODEL)}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
   const body = {
     contents: [{ role: "user", parts: [{ text: prompt }] }],
     generationConfig: { temperature: 0.2 }
@@ -603,7 +611,7 @@ async function callGemini(prompt) {
 
   if (!resp.ok) {
     const text = await resp.text();
-    throw new Error(`Gemini API ${resp.status}: ${text}`);
+    throw new Error(`Gemini API ${resp.status} [${GEMINI_MODEL}]: ${text}`);
   }
 
   const data = await resp.json();
@@ -999,10 +1007,16 @@ io.on("connection", (socket) => {
       const answer = await callGemini(prompt);
       ok = /RESULT:\s*OK/i.test(answer) || (local && !/RESULT:\s*FAIL/i.test(answer));
       message = answer;
-    } catch (_err) {
+    } catch (err) {
+      console.error("Gemini virtual-check error:", {
+        model: GEMINI_MODEL,
+        sentence,
+        required,
+        error: err?.message || String(err)
+      });
       message = local
-        ? "Gemini недоступен. Локальная проверка: порядок слов соблюдён."
-        : "Gemini недоступен. Локальная проверка: порядок слов нарушен.";
+        ? `${err?.message || "Gemini недоступен."}\nЛокальная проверка: порядок слов соблюдён.`
+        : `${err?.message || "Gemini недоступен."}\nЛокальная проверка: порядок слов нарушен.`;
     }
 
     const resultMessage = `Виртуальный учитель:\n${message}`;
@@ -1037,4 +1051,3 @@ io.on("connection", (socket) => {
 server.listen(PORT, () => {
   console.log(`German Sea Trap server started on http://localhost:${PORT}`);
 });
-
