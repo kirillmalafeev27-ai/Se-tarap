@@ -581,7 +581,7 @@ async function callGemini(prompt) {
     throw new Error("GEMINI_API_KEY не задан на сервере.");
   }
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.0-flash:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
   const body = {
     contents: [{ role: "user", parts: [{ text: prompt }] }],
     generationConfig: { temperature: 0.2 }
@@ -997,6 +997,7 @@ io.on("connection", (socket) => {
 server.listen(PORT, () => {
   console.log(`German Sea Trap server started on http://localhost:${PORT}`);
 });
+
 
 
 
