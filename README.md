@@ -18,7 +18,7 @@
 - Board size is controlled by teacher: 5x5 / 6x6 / 7x7.
 - Word container supports pairs `German - Russian` and keeps only German part.
 - `Shuffle words on board` shuffles words directly on the field.
-- Gemini 2.5 Flash runs through AITunnel from the backend only.
+- Gemini 3 Flash Preview runs through AITunnel from the backend only.
 - Required env vars: `AITUNNEL_API_KEY`, `AITUNNEL_BASE_URL`, `GEMINI_MODEL`.
 
 ## AITunnel Tutorial
@@ -27,12 +27,12 @@
 2. Set env vars on the backend:
    - `AITUNNEL_API_KEY=sk-aitunnel-...`
    - `AITUNNEL_BASE_URL=https://api.aitunnel.ru/v1`
-   - `GEMINI_MODEL=gemini-2.5-flash`
+   - `GEMINI_MODEL=gemini-3-flash-preview`
 3. Start the server:
    - `npm start`
 4. Open `http://localhost:3000/health` and verify:
    - `aiProvider` = `aitunnel`
-   - `aiModel` = `gemini-2.5-flash`
+   - `aiModel` = `gemini-3-flash-preview`
    - `hasApiKey` = `true`
 5. Open:
    - Student: `http://localhost:3000/student.html`
@@ -44,7 +44,7 @@
 2. Go to `Environment`.
 3. Add `AITUNNEL_API_KEY` with your `sk-aitunnel-...` key.
 4. Add `AITUNNEL_BASE_URL=https://api.aitunnel.ru/v1`.
-5. Add `GEMINI_MODEL=gemini-2.5-flash`.
+5. Add `GEMINI_MODEL=gemini-3-flash-preview`.
 6. Save and redeploy.
 
 ## Task Pairing Config (Server-side)

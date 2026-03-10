@@ -13,4 +13,4 @@ services:
       - key: AITUNNEL_BASE_URL
         value: https://api.aitunnel.ru/v1
       - key: GEMINI_MODEL
-        value: gemini-2.5-flash
+        value: gemini-3-flash-preview

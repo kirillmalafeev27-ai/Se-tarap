@@ -8,7 +8,7 @@ const AITUNNEL_API_KEY = (process.env.AITUNNEL_API_KEY || "").trim();
 const AITUNNEL_BASE_URL = String(process.env.AITUNNEL_BASE_URL || "https://api.aitunnel.ru/v1")
   .trim()
   .replace(/\/+$/g, "");
-const GEMINI_MODEL = (process.env.GEMINI_MODEL || "gemini-2.5-flash").trim();
+const GEMINI_MODEL = (process.env.GEMINI_MODEL || "gemini-3-flash-preview").trim();
 const TASK_SUPPORT_MODES = new Set(["adjacent", "row", "column", "rook", "global"]);
 
 function parseBool(value, fallback = false) {
