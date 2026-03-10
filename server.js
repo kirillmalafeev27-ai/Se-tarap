@@ -4,7 +4,7 @@ const http = require("http");
 const { Server } = require("socket.io");
 
 const PORT = Number(process.env.PORT || 3000);
-const GEMINI_API_KEY = (process.env.AIzaSyB3FKouGExqxXSdRWWVmizNvRFEvMz0KeI || "").trim();
+const GEMINI_API_KEY = (process.env.GEMINI_API_KEY || "").trim();
 const TASK_SUPPORT_MODES = new Set(["adjacent", "row", "column", "rook", "global"]);
 
 function parseBool(value, fallback = false) {
@@ -997,4 +997,5 @@ io.on("connection", (socket) => {
 server.listen(PORT, () => {
   console.log(`German Sea Trap server started on http://localhost:${PORT}`);
 });
+
 
